@@ -111,3 +111,8 @@ public/uploads/
 
 # Mock data
 mock-data.json
+
+.env
+.env.local
+.env.production
+.env.development
