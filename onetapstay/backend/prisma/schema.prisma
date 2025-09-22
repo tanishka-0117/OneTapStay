@@ -1,0 +1,506 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                String          @id @default(cuid())
+  email             String          @unique
+  password          String?         // For staff/admin login
+  phone             String?         @unique
+  role              String          @default("GUEST") // GUEST, STAFF, ADMIN
+  type              String          // Keep for backward compatibility
+  isActive          Boolean         @default(true)
+  isVerified        Boolean         @default(false)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  firstName         String?
+  lastName          String?
+  dateOfBirth       DateTime?
+  avatar            String?
+  preferredLanguage String          @default("en")
+  timezone          String          @default("UTC")
+  stripeCustomerId  String?         // Stripe customer ID for payments
+  accessLogs        AccessLog[]
+  bookings          Booking[]
+  hotel             Hotel?
+  loyaltyAccount    LoyaltyAccount?
+  notifications     Notification[]
+  otpCodes          OtpCode[]
+  paymentMethods    PaymentMethod[]
+  payments          Payment[]       // Payments made by user
+  staffAccount      StaffAccount?
+  facilityStaff     FacilityStaff[]
+
+  @@map("users")
+}
+
+model StaffAccount {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  employeeId  String?  @unique
+  department  String?
+  position    String?
+  permissions String?  // JSON string of permissions
+  isActive    Boolean  @default(true)
+  hiredAt     DateTime?
+  lastLogin   DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("staff_accounts")
+}
+
+model Hotel {
+  id            String        @id @default(cuid())
+  userId        String        @unique
+  name          String
+  description   String?
+  address       String
+  city          String
+  state         String
+  country       String
+  zipCode       String
+  phone         String
+  email         String
+  website       String?
+  checkInTime   String        @default("15:00")
+  checkOutTime  String        @default("11:00")
+  currency      String        @default("USD")
+  timezone      String        @default("UTC")
+  hasWifi       Boolean       @default(true)
+  hasParking    Boolean       @default(false)
+  hasPool       Boolean       @default(false)
+  hasGym        Boolean       @default(false)
+  hasSpa        Boolean       @default(false)
+  hasRestaurant Boolean       @default(false)
+  isActive      Boolean       @default(true)
+  isVerified    Boolean       @default(false)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  bookings      Booking[]
+  policies      HotelPolicy[]
+  staff         HotelStaff[]
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rooms         Room[]
+  wifiConfig    HotelWifiConfig?
+  facilities    Facility[]
+
+  @@map("hotels")
+}
+
+model HotelWifiConfig {
+  id                String   @id @default(cuid())
+  hotelId           String   @unique
+  networkName       String
+  networkPassword   String?  // Master password for hotel staff
+  guestNetworkName  String   // Guest network name
+  passwordFormat    String   @default("HOTEL_{BOOKING_ID}_{YEAR}") // Template for guest passwords
+  securityType      String   @default("WPA2-Personal")
+  bandwidth         String   @default("50 Mbps")
+  connectionType    String   @default("automatic")
+  qrCodeEnabled     Boolean  @default(true)
+  autoConnect       Boolean  @default(true)
+  validityHours     Int      @default(72) // How long WiFi access is valid
+  supportInstructions String?
+  customInstructions String? // Hotel-specific connection instructions
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  hotel             Hotel    @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+
+  @@map("hotel_wifi_configs")
+}
+
+model Room {
+  id          String    @id @default(cuid())
+  hotelId     String
+  number      String
+  floor       Int?
+  type        String
+  capacity    Int       @default(2)
+  beds        Int       @default(1)
+  bathrooms   Int       @default(1)
+  size        Float?
+  basePrice   Float
+  currency    String    @default("USD")
+  hasWifi     Boolean   @default(true)
+  hasAC       Boolean   @default(true)
+  hasTV       Boolean   @default(true)
+  hasBalcony  Boolean   @default(false)
+  hasKitchen  Boolean   @default(false)
+  hasBathtub  Boolean   @default(false)
+  isActive    Boolean   @default(true)
+  isAvailable Boolean   @default(true)
+  lockId      String?   @unique
+  lockType    String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  bookings    Booking[]
+  keys        RoomKey[]
+  hotel       Hotel     @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+
+  @@unique([hotelId, number])
+  @@map("rooms")
+}
+
+model Booking {
+  id               String        @id @default(cuid())
+  guestId          String
+  hotelId          String
+  roomId           String
+  checkIn          DateTime
+  checkOut         DateTime
+  guests           Int           @default(1)
+  totalAmount      Float
+  currency         String        @default("USD")
+  status           String        @default("pending")
+  guestName        String
+  guestEmail       String?
+  guestPhone       String?
+  specialRequests  String?
+  confirmationCode String        @unique @default(cuid())
+  externalBookingId String?      @unique // Booking ID from external websites
+  isTimeoutActive  Boolean       @default(false)
+  timeoutNotified  Boolean       @default(false)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  room             Room          @relation(fields: [roomId], references: [id])
+  hotel            Hotel         @relation(fields: [hotelId], references: [id])
+  guest            User          @relation(fields: [guestId], references: [id])
+  payments         Payment[]
+  keys             RoomKey[]
+  wifiVouchers     WifiVoucher[]
+  timeoutAlarms    TimeoutAlarm[] // Relation to timeout alarms
+  facilityTransactions FacilityTransaction[]
+  journeyEvents    GuestJourneyEvent[]
+
+  @@map("bookings")
+}
+
+model Payment {
+  id                    String    @id @default(cuid())
+  userId                String?   // Optional - can be null for guest payments
+  bookingId             String?   // Optional - for booking-related payments
+  facilityServiceId     String?   // Optional - for facility service payments
+  amount                Float
+  currency              String    @default("USD")
+  status                String    @default("pending") // pending, completed, failed, cancelled, refunded
+  paymentMethod         String    @default("stripe")
+  stripePaymentIntentId String?   @unique
+  stripeCustomerId      String?
+  description           String?
+  metadata              String?   // Store additional payment data as JSON string
+  refundAmount          Float?
+  refundReason          String?
+  refundedAt            DateTime?
+  completedAt           DateTime? // When payment was completed
+  failureReason         String?   // Reason for payment failure
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  // Relations
+  user                  User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  booking               Booking?  @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+
+  @@map("payments")
+}
+
+model PaymentMethod {
+  id                    String   @id @default(cuid())
+  userId                String
+  type                  String
+  last4                 String?
+  brand                 String?
+  expiryMonth           Int?
+  expiryYear            Int?
+  stripePaymentMethodId String?  @unique
+  isDefault             Boolean  @default(false)
+  isActive              Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("payment_methods")
+}
+
+model RoomKey {
+  id            String              @id @default(cuid())
+  bookingId     String
+  roomId        String
+  keyType       String
+  keyData       String
+  validFrom     DateTime
+  validUntil    DateTime
+  maxUses       Int?                @default(1000)
+  usedCount     Int                 @default(0)
+  isActive      Boolean             @default(true)
+  isRevoked     Boolean             @default(false)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  accessLogs    AccessLog[]
+  journeyEvents GuestJourneyEvent[]
+  room          Room                @relation(fields: [roomId], references: [id])
+  booking       Booking             @relation(fields: [bookingId], references: [id])
+
+  @@map("room_keys")
+}
+
+model AccessLog {
+  id           String   @id @default(cuid())
+  userId       String?
+  keyId        String?
+  action       String
+  device       String?
+  ipAddress    String?
+  location     String?
+  success      Boolean
+  errorMessage String?
+  createdAt    DateTime @default(now())
+  key          RoomKey? @relation(fields: [keyId], references: [id])
+  user         User?    @relation(fields: [userId], references: [id])
+
+  @@map("access_logs")
+}
+
+model WifiVoucher {
+  id         String   @id @default(cuid())
+  bookingId  String
+  username   String   @unique
+  password   String
+  validFrom  DateTime
+  validUntil DateTime
+  bandwidth  String?
+  isActive   Boolean  @default(true)
+  isUsed     Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  booking    Booking  @relation(fields: [bookingId], references: [id])
+
+  @@map("wifi_vouchers")
+}
+
+model LoyaltyAccount {
+  id               String               @id @default(cuid())
+  userId           String               @unique
+  currentPoints    Int                  @default(0)
+  totalEarned      Int                  @default(0)
+  totalRedeemed    Int                  @default(0)
+  tier             String               @default("bronze")
+  pointsToNextTier Int                  @default(1000)
+  tierBenefits     String?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  user             User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions     LoyaltyTransaction[]
+
+  @@map("loyalty_accounts")
+}
+
+model LoyaltyTransaction {
+  id          String         @id @default(cuid())
+  accountId   String
+  type        String
+  points      Int
+  description String?
+  reference   String?
+  createdAt   DateTime       @default(now())
+  account     LoyaltyAccount @relation(fields: [accountId], references: [id])
+
+  @@map("loyalty_transactions")
+}
+
+model OtpCode {
+  id        String   @id @default(cuid())
+  userId    String?
+  email     String?
+  phone     String?
+  code      String
+  purpose   String   @default("login")
+  expiresAt DateTime
+  isUsed    Boolean  @default(false)
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id])
+
+  @@map("otp_codes")
+}
+
+model HotelStaff {
+  id                String   @id @default(cuid())
+  hotelId           String
+  email             String   @unique
+  firstName         String
+  lastName          String
+  role              String
+  canManageBookings Boolean  @default(false)
+  canManageRooms    Boolean  @default(false)
+  canManageStaff    Boolean  @default(false)
+  canViewReports    Boolean  @default(false)
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  hotel             Hotel    @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+
+  @@map("hotel_staff")
+}
+
+model HotelPolicy {
+  id          String   @id @default(cuid())
+  hotelId     String
+  type        String
+  title       String
+  description String
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  hotel       Hotel    @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+
+  @@map("hotel_policies")
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  title     String
+  message   String
+  type      String    @default("info")
+  priority  String    @default("normal") // low, normal, high, urgent
+  isRead    Boolean   @default(false)
+  sentAt    DateTime?
+  readAt    DateTime?
+  sendEmail Boolean   @default(false)
+  sendSms   Boolean   @default(false)
+  sendPush  Boolean   @default(true)
+  metadata  String?   // JSON string for storing additional data
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+model TimeoutAlarm {
+  id             String   @id @default(cuid())
+  bookingId      String
+  guestName      String
+  roomNumber     String
+  overtimeMinutes Int
+  isActive       Boolean  @default(true)
+  isAcknowledged Boolean  @default(false)
+  acknowledgedAt DateTime?
+  acknowledgedBy String?  // Staff member who acknowledged
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  booking        Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@map("timeout_alarms")
+}
+
+// Guest Journey Timeline System Models
+
+model Facility {
+  id              String               @id @default(cuid())
+  hotelId         String
+  name            String               // e.g., "Restaurant", "Pool", "Spa", "Gym"
+  type            String               // "dining", "recreation", "wellness", "entertainment"
+  description     String?
+  location        String?              // "Ground Floor", "Pool Deck", etc.
+  operatingHours  String?              // JSON string with hours
+  isActive        Boolean              @default(true)
+  requiresPayment Boolean              @default(false)
+  allowsCredit    Boolean              @default(true) // Can charges be added to room bill
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  hotel           Hotel                @relation(fields: [hotelId], references: [id])
+  staff           FacilityStaff[]
+  services        FacilityService[]
+  transactions    FacilityTransaction[]
+  journeyEvents   GuestJourneyEvent[]
+
+  @@map("facilities")
+}
+
+model FacilityService {
+  id          String               @id @default(cuid())
+  facilityId  String
+  name        String               // "Burger", "Pool Access", "Massage"
+  description String?
+  price       Float
+  currency    String               @default("USD")
+  category    String?              // "food", "beverage", "service", "access"
+  isActive    Boolean              @default(true)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  facility    Facility             @relation(fields: [facilityId], references: [id])
+  transactions FacilityTransaction[]
+
+  @@map("facility_services")
+}
+
+model FacilityStaff {
+  id         String    @id @default(cuid())
+  userId     String
+  facilityId String
+  role       String    @default("staff") // "staff", "manager"
+  isActive   Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  user       User      @relation(fields: [userId], references: [id])
+  facility   Facility  @relation(fields: [facilityId], references: [id])
+
+  @@unique([userId, facilityId])
+  @@map("facility_staff")
+}
+
+model FacilityTransaction {
+  id              String           @id @default(cuid())
+  bookingId       String
+  facilityId      String
+  serviceId       String?
+  staffId         String           // Who processed the transaction
+  guestName       String
+  serviceName     String           // Snapshot of service name
+  quantity        Int              @default(1)
+  unitPrice       Float
+  totalAmount     Float
+  currency        String           @default("USD")
+  paymentStatus   String           @default("pending") // "pending", "completed", "cancelled", "refunded"
+  paymentMethod   String?          // "cash", "card", "room_charge"
+  notes           String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  booking         Booking          @relation(fields: [bookingId], references: [id])
+  facility        Facility         @relation(fields: [facilityId], references: [id])
+  service         FacilityService? @relation(fields: [serviceId], references: [id])
+  journeyEvent    GuestJourneyEvent?
+
+  @@map("facility_transactions")
+}
+
+model GuestJourneyEvent {
+  id                   String                @id @default(cuid())
+  bookingId            String
+  eventType            String                // "check_in", "door_access", "facility_visit", "purchase", "payment", "check_out"
+  title                String
+  description          String?
+  facilityId           String?
+  facilityTransactionId String?              @unique
+  roomKeyId            String?
+  amount               Float?
+  currency             String?               @default("USD")
+  metadata             String?               // JSON for additional data
+  timestamp            DateTime              @default(now())
+  createdAt            DateTime              @default(now())
+  booking              Booking               @relation(fields: [bookingId], references: [id])
+  facility             Facility?             @relation(fields: [facilityId], references: [id])
+  facilityTransaction  FacilityTransaction?  @relation(fields: [facilityTransactionId], references: [id])
+  roomKey              RoomKey?              @relation(fields: [roomKeyId], references: [id])
+
+  @@map("guest_journey_events")
+}

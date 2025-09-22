@@ -1,0 +1,25 @@
+<!-- Simple favicon for ICO conversion -->
+<svg width="16" height="16" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- House outline simplified -->
+  <path
+    d="M20 45 L50 20 L80 45 L80 75 C80 78 77 81 74 81 L26 81 C23 81 20 78 20 75 Z"
+    fill="#1e40af"
+    stroke="#06b6d4"
+    stroke-width="2"
+  />
+  
+  <!-- Simplified fingerprint -->
+  <ellipse cx="50" cy="45" rx="6" ry="8" fill="none" stroke="#06b6d4" stroke-width="2" />
+  
+  <!-- Arrow -->
+  <path
+    d="M52 58 L58 62 L52 66 M45 62 L57 62"
+    fill="none"
+    stroke="#1e40af"
+    stroke-width="2"
+    stroke-linecap="round"
+  />
+  
+  <!-- Dot -->
+  <circle cx="70" cy="85" r="2" fill="#06b6d4" />
+</svg>

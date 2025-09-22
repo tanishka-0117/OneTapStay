@@ -1,0 +1,744 @@
+'use client'
+
+import React, { useState, useEffect } from 'react'
+import { CreditCard, DollarSign, ArrowLeft, CheckCircle, XCircle } from 'lucide-react'
+import { useRouter } from 'next/navigation'
+
+interface PaymentMethod {
+  id: string
+  last4: string
+  brand: string
+  exp_month: number
+  exp_year: number
+}
+
+interface Payment {
+  id: string
+  amount: number
+  currency: string
+  status: string
+  paymentMethod: string
+  method_details: string
+  createdAt: string
+  description?: string
+}
+
+const PaymentPage: React.FC = () => {
+  const router = useRouter()
+  const [isLoading, setIsLoading] = useState(false)
+  const [amount, setAmount] = useState('')
+  const [description, setDescription] = useState('')
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([])
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<string>('')
+  const [paymentHistory, setPaymentHistory] = useState<Payment[]>([])
+  const [paymentStatus, setPaymentStatus] = useState<'idle' | 'processing' | 'success' | 'error'>('idle')
+  const [errorMessage, setErrorMessage] = useState('')
+
+  // Format currency in INR
+  const formatINR = (amount: number): string => {
+    return new Intl.NumberFormat('en-IN', {
+      style: 'currency',
+      currency: 'INR',
+      minimumFractionDigits: 2
+    }).format(amount)
+  }
+
+  useEffect(() => {
+    fetchPaymentMethods()
+    fetchPaymentHistory()
+  }, [])
+
+  const fetchPaymentMethods = async () => {
+    try {
+      const token = localStorage.getItem('token')
+      const response = await fetch('/api/payments/methods', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      })
+      
+      if (response.ok) {
+        const data = await response.json()
+        setPaymentMethods(data.paymentMethods || {
+          cards: [],
+          upi: [],
+          wallets: [],
+          netbanking: []
+        })
+      }
+    } catch (error) {
+      console.error('Error fetching payment methods:', error)
+    }
+  }
+
+  const fetchPaymentHistory = async () => {
+    try {
+      const token = localStorage.getItem('token')
+      const response = await fetch('/api/payments/history', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      })
+      
+      if (response.ok) {
+        const data = await response.json()
+        setPaymentHistory(data.payments || [])
+      }
+    } catch (error) {
+      console.error('Error fetching payment history:', error)
+    }
+  }
+
+  const handlePayment = async () => {
+    if (!amount || parseFloat(amount) <= 0) {
+      setErrorMessage('Please enter a valid amount')
+      return
+    }
+
+    // Validate payment method selection
+    if (selectedPaymentType === 'upi' && !showQRCode && !upiId) {
+      setErrorMessage('Please enter UPI ID or use QR code')
+      return
+    }
+
+    if (selectedPaymentType !== 'upi' && !selectedPaymentMethod) {
+      setErrorMessage('Please select a payment method')
+      return
+    }
+
+    setIsLoading(true)
+    setPaymentStatus('processing')
+    setErrorMessage('')
+
+    try {
+      const token = localStorage.getItem('token')
+      
+      // Prepare payment data for Indian methods
+      let paymentData: any = {
+        amount: parseFloat(amount) * 100, // Convert to paise (Indian cents)
+        currency: 'inr',
+        description,
+        payment_type: selectedPaymentType
+      }
+
+      // Add specific payment method details
+      if (selectedPaymentType === 'upi') {
+        if (showQRCode) {
+          paymentData.upi_type = 'qr_code'
+        } else {
+          paymentData.upi_type = 'upi_id'
+          paymentData.upi_id = upiId
+        }
+      } else {
+        paymentData.payment_method = selectedPaymentMethod
+      }
+      
+      // Create payment intent
+      const intentResponse = await fetch('/api/payments/create-intent', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(paymentData)
+      })
+
+      if (!intentResponse.ok) {
+        throw new Error('Failed to create payment intent')
+      }
+
+      const intentData = await intentResponse.json()
+
+      // For UPI QR code, show success immediately (in real app, would wait for webhook)
+      if (selectedPaymentType === 'upi' && showQRCode) {
+        setTimeout(() => {
+          setPaymentStatus('success')
+          setAmount('')
+          setDescription('')
+          setSelectedPaymentMethod('')
+          setUpiId('')
+          fetchPaymentHistory()
+          setIsLoading(false)
+        }, 3000)
+        return
+      }
+
+      // Confirm payment for other methods
+      const confirmResponse = await fetch('/api/payments/confirm', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          payment_intent_id: intentData.id,
+          payment_type: selectedPaymentType
+        })
+      })
+
+      if (!confirmResponse.ok) {
+        throw new Error('Payment confirmation failed')
+      }
+
+      setPaymentStatus('success')
+      setAmount('')
+      setDescription('')
+      setSelectedPaymentMethod('')
+      setUpiId('')
+      
+      // Refresh payment history
+      await fetchPaymentHistory()
+      
+    } catch (error) {
+      console.error('Payment error:', error)
+      setPaymentStatus('error')
+      setErrorMessage(error instanceof Error ? error.message : 'Payment failed')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const formatCurrency = (amount: number, currency: string) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: currency.toUpperCase()
+    }).format(amount / 100)
+  }
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    })
+  }
+
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case 'succeeded':
+        return <CheckCircle className="w-5 h-5 text-green-500" />
+      case 'failed':
+        return <XCircle className="w-5 h-5 text-red-500" />
+      default:
+        return <DollarSign className="w-5 h-5 text-yellow-500" />
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 p-4">
+      <div className="max-w-4xl mx-auto">
+        {/* Header */}
+        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <button
+                onClick={() => router.back()}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">Payment Center</h1>
+                <p className="text-gray-600">Manage your payments and billing</p>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        {/* Payment Status Alert */}
+        {paymentStatus === 'success' && (
+          <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
+            <div className="flex items-center gap-3">
+              <CheckCircle className="w-5 h-5 text-green-500" />
+              <p className="text-green-800">Payment completed successfully!</p>
+            </div>
+          </div>
+        )}
+
+        {paymentStatus === 'error' && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
+            <div className="flex items-center gap-3">
+              <XCircle className="w-5 h-5 text-red-500" />
+              <p className="text-red-800">{errorMessage}</p>
+            </div>
+          </div>
+        )}
+
+        <div className="max-w-4xl mx-auto">
+          {/* Payment Interface */}
+          <div className="bg-white rounded-lg shadow-md p-6">
+            <h2 className="text-xl font-semibold text-gray-900 mb-6">Choose Payment Method</h2>
+            
+            {/* Payment Method Tabs */}
+            <div className="flex border-b border-gray-200 mb-6">
+              <button
+                onClick={() => setSelectedPaymentType('upi')}
+                className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${
+                  selectedPaymentType === 'upi'
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Smartphone className="w-4 h-4" />
+                  UPI
+                </div>
+              </button>
+              <button
+                onClick={() => setSelectedPaymentType('cards')}
+                className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${
+                  selectedPaymentType === 'cards'
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <CreditCard className="w-4 h-4" />
+                  Cards
+                </div>
+              </button>
+              <button
+                onClick={() => setSelectedPaymentType('wallets')}
+                className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${
+                  selectedPaymentType === 'wallets'
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Wallet className="w-4 h-4" />
+                  Wallets
+                </div>
+              </button>
+              <button
+                onClick={() => setSelectedPaymentType('netbanking')}
+                className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${
+                  selectedPaymentType === 'netbanking'
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Building2 className="w-4 h-4" />
+                  Net Banking
+                </div>
+              </button>
+            </div>
+
+            {/* UPI Payment */}
+            {selectedPaymentType === 'upi' && (
+              <div className="space-y-4">
+                <div className="flex gap-4 mb-4">
+                  <button
+                    onClick={() => setShowQRCode(false)}
+                    className={`px-4 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                      !showQRCode
+                        ? 'bg-blue-50 border-blue-200 text-blue-700'
+                        : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
+                    }`}
+                  >
+                    Enter UPI ID
+                  </button>
+                  <button
+                    onClick={() => setShowQRCode(true)}
+                    className={`px-4 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                      showQRCode
+                        ? 'bg-blue-50 border-blue-200 text-blue-700'
+                        : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
+                    }`}
+                  >
+                    <QrCode className="w-4 h-4 inline mr-2" />
+                    Scan QR Code
+                  </button>
+                </div>
+
+                {!showQRCode ? (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Enter your UPI ID
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={upiId}
+                        onChange={(e) => setUpiId(e.target.value)}
+                        placeholder="example@paytm"
+                        className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 pr-10 ${
+                          upiId && validateUpiId(upiId)
+                            ? 'border-green-300 focus:border-green-500'
+                            : upiId
+                            ? 'border-red-300 focus:border-red-500'
+                            : 'border-gray-300 focus:border-blue-500'
+                        }`}
+                      />
+                      {upiId && (
+                        <div className="absolute inset-y-0 right-0 pr-3 flex items-center">
+                          {validateUpiId(upiId) ? (
+                            <CheckCircle className="w-5 h-5 text-green-500" />
+                          ) : (
+                            <XCircle className="w-5 h-5 text-red-500" />
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    {upiId && !validateUpiId(upiId) && (
+                      <p className="text-sm text-red-600 mt-1">Please enter a valid UPI ID (e.g., name@bank)</p>
+                    )}
+                    
+                    {/* Popular UPI Apps */}
+                    <div className="mt-3">
+                      <p className="text-xs text-gray-500 mb-2">Popular UPI apps:</p>
+                      <div className="flex flex-wrap gap-2">
+                        {['@paytm', '@googlepay', '@phonepe', '@ybl', '@ibl', '@axisbank'].map((provider) => (
+                          <button
+                            key={provider}
+                            onClick={() => {
+                              const username = upiId.split('@')[0] || 'yourname'
+                              setUpiId(`${username}${provider}`)
+                            }}
+                            className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
+                          >
+                            {provider}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    
+                    {/* Saved UPI IDs */}
+                    {paymentMethods.upi.length > 0 && (
+                      <div className="mt-4">
+                        <p className="text-sm font-medium text-gray-700 mb-2">Or choose from saved UPI IDs:</p>
+                        <div className="space-y-2">
+                          {paymentMethods.upi.map((upi) => (
+                            <button
+                              key={upi.id}
+                              onClick={() => setUpiId(upi.upi_id)}
+                              className="w-full p-3 text-left border border-gray-200 rounded-lg hover:bg-gray-50 flex items-center justify-between"
+                            >
+                              <div className="flex items-center gap-3">
+                                <Smartphone className="w-5 h-5 text-gray-400" />
+                                <div>
+                                  <p className="font-medium">{upi.upi_id}</p>
+                                  <p className="text-sm text-gray-500">{upi.provider}</p>
+                                </div>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-center py-8">
+                    <div className="w-56 h-56 mx-auto bg-white border-2 border-dashed border-gray-300 rounded-lg flex flex-col items-center justify-center mb-4 relative">
+                      {/* QR Code Pattern Simulation */}
+                      <div className="grid grid-cols-8 gap-1 mb-4">
+                        {Array.from({ length: 64 }).map((_, i) => (
+                          <div
+                            key={i}
+                            className={`w-2 h-2 ${
+                              Math.random() > 0.5 ? 'bg-black' : 'bg-white'
+                            }`}
+                          />
+                        ))}
+                      </div>
+                      <QrCode className="w-8 h-8 text-gray-400 absolute top-2 right-2" />
+                    </div>
+                    <p className="text-gray-800 font-medium mb-2">Scan & Pay with any UPI app</p>
+                    <p className="text-sm text-gray-500 mb-4">Amount: {formatINR(parseFloat(amount || '0'))}</p>
+                    
+                    {/* UPI App Icons */}
+                    <div className="flex justify-center gap-4 mb-4">
+                      <div className="flex flex-col items-center">
+                        <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center mb-1">
+                          <span className="text-white text-xs font-bold">GPay</span>
+                        </div>
+                        <span className="text-xs text-gray-500">Google Pay</span>
+                      </div>
+                      <div className="flex flex-col items-center">
+                        <div className="w-10 h-10 bg-purple-600 rounded-lg flex items-center justify-center mb-1">
+                          <span className="text-white text-xs font-bold">PhonePe</span>
+                        </div>
+                        <span className="text-xs text-gray-500">PhonePe</span>
+                      </div>
+                      <div className="flex flex-col items-center">
+                        <div className="w-10 h-10 bg-blue-800 rounded-lg flex items-center justify-center mb-1">
+                          <span className="text-white text-xs font-bold">Paytm</span>
+                        </div>
+                        <span className="text-xs text-gray-500">Paytm</span>
+                      </div>
+                    </div>
+                    
+                    {paymentStatus === 'processing' && (
+                      <div className="flex items-center justify-center gap-2 text-blue-600">
+                        <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                        <span className="text-sm">Waiting for payment...</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Cards Payment */}
+            {selectedPaymentType === 'cards' && (
+              <div className="space-y-4">
+                {paymentMethods.cards.length > 0 && (
+                  <div>
+                    <p className="text-sm font-medium text-gray-700 mb-3">Saved Cards:</p>
+                    <div className="space-y-2">
+                      {paymentMethods.cards.map((card) => (
+                        <button
+                          key={card.id}
+                          onClick={() => setSelectedPaymentMethod(card.id)}
+                          className={`w-full p-3 text-left border rounded-lg hover:bg-gray-50 flex items-center justify-between ${
+                            selectedPaymentMethod === card.id ? 'border-blue-500 bg-blue-50' : 'border-gray-200'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <CreditCard className="w-5 h-5 text-gray-400" />
+                            <div>
+                              <p className="font-medium">**** **** **** {card.last4}</p>
+                              <p className="text-sm text-gray-500">{card.brand.toUpperCase()} • {card.network} • Expires {card.exp_month}/{card.exp_year}</p>
+                            </div>
+                          </div>
+                          {selectedPaymentMethod === card.id && (
+                            <CheckCircle className="w-5 h-5 text-blue-500" />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                <div className="border-t pt-4">
+                  <button className="w-full p-3 border-2 border-dashed border-gray-300 rounded-lg text-gray-600 hover:border-gray-400 hover:bg-gray-50">
+                    <Plus className="w-5 h-5 inline mr-2" />
+                    Add New Card
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Wallets Payment */}
+            {selectedPaymentType === 'wallets' && (
+              <div className="space-y-3">
+                {paymentMethods.wallets.map((wallet) => (
+                  <button
+                    key={wallet.id}
+                    onClick={() => setSelectedPaymentMethod(wallet.id)}
+                    className={`w-full p-4 text-left border rounded-lg hover:bg-gray-50 flex items-center justify-between ${
+                      selectedPaymentMethod === wallet.id ? 'border-blue-500 bg-blue-50' : 'border-gray-200'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <Wallet className="w-6 h-6 text-gray-400" />
+                      <div>
+                        <p className="font-medium">{wallet.name}</p>
+                        <p className="text-sm text-gray-500">Balance: ₹{wallet.balance.toFixed(2)}</p>
+                      </div>
+                    </div>
+                    {selectedPaymentMethod === wallet.id && (
+                      <CheckCircle className="w-5 h-5 text-blue-500" />
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Net Banking Payment */}
+            {selectedPaymentType === 'netbanking' && (
+              <div className="space-y-3">
+                {paymentMethods.netbanking.map((bank) => (
+                  <button
+                    key={bank.id}
+                    onClick={() => setSelectedPaymentMethod(bank.id)}
+                    className={`w-full p-4 text-left border rounded-lg hover:bg-gray-50 flex items-center justify-between ${
+                      selectedPaymentMethod === bank.id ? 'border-blue-500 bg-blue-50' : 'border-gray-200'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <Building2 className="w-6 h-6 text-gray-400" />
+                      <div>
+                        <p className="font-medium">{bank.name}</p>
+                        <p className="text-sm text-gray-500">{bank.code}</p>
+                      </div>
+                    </div>
+                    {selectedPaymentMethod === bank.id && (
+                      <CheckCircle className="w-5 h-5 text-blue-500" />
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Payment Amount and Details */}
+          <div className="bg-white rounded-lg shadow-md p-6 mt-6">
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">Payment Details</h2>
+            
+            <div className="grid md:grid-cols-2 gap-4 mb-6">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Amount (₹)
+                </label>
+                <input
+                  type="number"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  placeholder="Enter amount"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Description (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  placeholder="Payment description"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+              </div>
+            </div>
+
+            {/* Payment Summary */}
+            {amount && (
+              <div className="bg-gray-50 rounded-lg p-4 mb-6">
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-600">Amount to pay:</span>
+                  <span className="text-xl font-semibold text-gray-900">{formatINR(parseFloat(amount || '0'))}</span>
+                </div>
+                {description && (
+                  <div className="flex justify-between items-center mt-2">
+                    <span className="text-gray-600">Description:</span>
+                    <span className="text-gray-900">{description}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Pay Button */}
+            <button
+              onClick={handlePayment}
+              disabled={
+                !amount || 
+                parseFloat(amount) <= 0 || 
+                isLoading || 
+                (selectedPaymentType === 'upi' && !showQRCode && (!upiId || !validateUpiId(upiId))) ||
+                (selectedPaymentType !== 'upi' && !selectedPaymentMethod)
+              }
+              className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg font-medium hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              {isLoading ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  Processing...
+                </>
+              ) : (
+                <>
+                  <Shield className="w-4 h-4" />
+                  Pay {formatINR(parseFloat(amount || '0'))}
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Quick Actions */}
+          <div className="bg-white rounded-lg shadow-md p-6 mt-6">
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">Quick Actions</h2>
+            <div className="space-y-3">
+              <button
+                onClick={() => {
+                  setAmount('500')
+                  setDescription('Hotel booking payment')
+                  window.scrollTo({ top: 0, behavior: 'smooth' })
+                }}
+                className="w-full flex items-center gap-3 p-3 text-left border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                <DollarSign className="w-5 h-5 text-green-500" />
+                <div>
+                  <p className="font-medium">Quick Pay {formatINR(500)}</p>
+                  <p className="text-sm text-gray-500">Hotel booking payment</p>
+                </div>
+              </button>
+              
+              <button
+                onClick={() => {
+                  setAmount('1500')
+                  setDescription('Room service charges')
+                  window.scrollTo({ top: 0, behavior: 'smooth' })
+                }}
+                className="w-full flex items-center gap-3 p-3 text-left border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                <DollarSign className="w-5 h-5 text-orange-500" />
+                <div>
+                  <p className="font-medium">Quick Pay {formatINR(1500)}</p>
+                  <p className="text-sm text-gray-500">Room service charges</p>
+                </div>
+              </button>
+              
+              <button className="w-full flex items-center gap-3 p-3 text-left border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+                <CreditCard className="w-5 h-5 text-blue-500" />
+                <div>
+                  <p className="font-medium">Add Payment Method</p>
+                  <p className="text-sm text-gray-500">Add a new card or payment method</p>
+                </div>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Payment History */}
+        <div className="bg-white rounded-lg shadow-md p-6 mt-6">
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Payment History</h2>
+          {paymentHistory.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-gray-200">
+                    <th className="text-left py-3 px-4">Date</th>
+                    <th className="text-left py-3 px-4">Amount</th>
+                    <th className="text-left py-3 px-4">Description</th>
+                    <th className="text-left py-3 px-4">Method</th>
+                    <th className="text-left py-3 px-4">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paymentHistory.map((payment) => (
+                    <tr key={payment.id} className="border-b border-gray-100">
+                      <td className="py-3 px-4 text-sm text-gray-900">{formatDate(payment.createdAt)}</td>
+                      <td className="py-3 px-4 text-sm font-medium">{formatCurrency(payment.amount, payment.currency)}</td>
+                      <td className="py-3 px-4 text-sm text-gray-600">{payment.description || 'Payment'}</td>
+                      <td className="py-3 px-4 text-sm text-gray-600">{payment.paymentMethod}</td>
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-2">
+                          {getStatusIcon(payment.status)}
+                          <span className="text-sm capitalize">{payment.status}</span>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="text-gray-500">No payment history found</p>
+          )}
+        </div>
+
+
+      </div>
+    </div>
+  )
+}
+
+export default PaymentPage

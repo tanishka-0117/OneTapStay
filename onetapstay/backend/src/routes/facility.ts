@@ -1,0 +1,441 @@
+import { Router } from 'express';
+import { PrismaClient } from '@prisma/client';
+import { AppError, asyncHandler } from '../middleware/errorHandler';
+import { adminAuthMiddleware } from '../middleware/adminAuth';
+import { guestAuthMiddleware } from '../middleware/guestAuth';
+
+const router = Router();
+const prisma = new PrismaClient();
+
+// Guest endpoint to view hotel facilities
+router.get('/guest/:hotelId/facilities', guestAuthMiddleware, asyncHandler(async (req, res) => {
+  const { hotelId } = req.params;
+
+  // Get guest's booking to verify they have access to this hotel
+  const booking = await prisma.booking.findFirst({
+    where: { 
+      guestId: req.user.id,
+      hotelId: hotelId,
+      status: { in: ['active', 'confirmed', 'checkedin'] }
+    }
+  });
+
+  if (!booking) {
+    return res.status(403).json({
+      success: false,
+      message: 'Access denied - no active booking at this hotel'
+    });
+  }
+
+  const facilities = await prisma.facility.findMany({
+    where: { 
+      hotelId,
+      isActive: true
+    },
+    include: {
+      services: {
+        where: { isActive: true },
+        orderBy: [{ category: 'asc' }, { name: 'asc' }]
+      }
+    },
+    orderBy: { name: 'asc' }
+  });
+
+  res.json({
+    success: true,
+    data: facilities
+  });
+}));
+
+// Middleware to require admin authentication for remaining routes
+router.use(adminAuthMiddleware);
+
+// Get all facilities for a hotel
+router.get('/facilities/:hotelId', asyncHandler(async (req, res) => {
+  const { hotelId } = req.params;
+
+  const facilities = await prisma.facility.findMany({
+    where: { hotelId },
+    include: {
+      services: {
+        where: { isActive: true },
+        orderBy: { name: 'asc' }
+      },
+      staff: {
+        include: {
+          user: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              email: true,
+              role: true
+            }
+          }
+        }
+      }
+    },
+    orderBy: { name: 'asc' }
+  });
+
+  res.json({
+    success: true,
+    data: facilities
+  });
+}));
+
+// Get specific facility with services
+router.get('/facility/:facilityId', asyncHandler(async (req, res) => {
+  const { facilityId } = req.params;
+
+  const facility = await prisma.facility.findUnique({
+    where: { id: facilityId },
+    include: {
+      services: {
+        where: { isActive: true },
+        orderBy: [{ category: 'asc' }, { name: 'asc' }]
+      },
+      staff: {
+        include: {
+          user: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              email: true,
+              role: true
+            }
+          }
+        }
+      }
+    }
+  });
+
+  if (!facility) {
+    throw new AppError('Facility not found', 404);
+  }
+
+  res.json({
+    success: true,
+    data: facility
+  });
+}));
+
+// Lookup guest by booking ID
+router.get('/guest-lookup/:bookingId', asyncHandler(async (req, res) => {
+  const { bookingId } = req.params;
+
+  const booking = await prisma.booking.findUnique({
+    where: { id: bookingId },
+    include: {
+      guest: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          phone: true
+        }
+      },
+      room: {
+        select: {
+          id: true,
+          number: true,
+          type: true
+        }
+      },
+      hotel: {
+        select: {
+          id: true,
+          name: true
+        }
+      },
+      facilityTransactions: {
+        include: {
+          facility: {
+            select: {
+              id: true,
+              name: true,
+              type: true
+            }
+          }
+        },
+        orderBy: { createdAt: 'desc' }
+      }
+    }
+  });
+
+  if (!booking) {
+    throw new AppError('Booking not found', 404);
+  }
+
+  // Check if guest is currently checked in
+  const now = new Date();
+  const isCheckedIn = booking.checkIn <= now && booking.checkOut >= now;
+
+  // Calculate total pending amount
+  const pendingTransactions = booking.facilityTransactions.filter(
+    transaction => transaction.paymentStatus === 'pending'
+  );
+  const totalPending = pendingTransactions.reduce(
+    (sum, transaction) => sum + transaction.totalAmount, 0
+  );
+
+  res.json({
+    success: true,
+    data: {
+      booking: {
+        id: booking.id,
+        checkInDate: booking.checkIn,
+        checkOutDate: booking.checkOut,
+        status: booking.status,
+        isCheckedIn,
+        totalAmount: booking.totalAmount,
+        paidAmount: 0 // Placeholder - calculate from payments if needed
+      },
+      guest: booking.guest,
+      room: booking.room,
+      hotel: booking.hotel,
+      facilityTransactions: booking.facilityTransactions,
+      summary: {
+        totalPending,
+        totalTransactions: booking.facilityTransactions.length,
+        pendingTransactions: pendingTransactions.length
+      }
+    }
+  });
+}));
+
+// Add service/item to guest account
+router.post('/add-service', asyncHandler(async (req, res) => {
+  const {
+    bookingId,
+    facilityId,
+    serviceId,
+    quantity = 1,
+    paymentMethod,
+    notes
+  } = req.body;
+
+  // Verify booking exists and is active
+  const booking = await prisma.booking.findUnique({
+    where: { id: bookingId },
+    include: {
+      guest: {
+        select: { firstName: true, lastName: true }
+      }
+    }
+  });
+
+  if (!booking) {
+    throw new AppError('Booking not found', 404);
+  }
+
+  // Check if guest is currently checked in
+  const now = new Date();
+  const isCheckedIn = booking.checkIn <= now && booking.checkOut >= now;
+  
+  if (!isCheckedIn) {
+    throw new AppError('Guest is not currently checked in', 400);
+  }
+
+  // Get service details
+  const service = await prisma.facilityService.findUnique({
+    where: { id: serviceId },
+    include: {
+      facility: {
+        select: { name: true, type: true }
+      }
+    }
+  });
+
+  if (!service || !service.isActive) {
+    throw new AppError('Service not found or not available', 404);
+  }
+
+  if (service.facilityId !== facilityId) {
+    throw new AppError('Service does not belong to the specified facility', 400);
+  }
+
+  // Calculate total amount
+  const unitPrice = service.price;
+  const totalAmount = unitPrice * quantity;
+
+  // Determine payment status
+  let paymentStatus = 'pending';
+  if (paymentMethod && ['cash', 'card'].includes(paymentMethod)) {
+    paymentStatus = 'completed';
+  }
+
+  // Create transaction
+  const transaction = await prisma.facilityTransaction.create({
+    data: {
+      bookingId,
+      facilityId,
+      serviceId,
+      staffId: req.user.id, // From auth middleware
+      guestName: `${booking.guest.firstName || ''} ${booking.guest.lastName || ''}`.trim(),
+      serviceName: service.name,
+      quantity,
+      unitPrice,
+      totalAmount,
+      paymentStatus,
+      paymentMethod,
+      notes
+    },
+    include: {
+      facility: {
+        select: { name: true, type: true }
+      },
+      service: {
+        select: { name: true, category: true }
+      }
+    }
+  });
+
+  // Create guest journey event
+  await prisma.guestJourneyEvent.create({
+    data: {
+      bookingId,
+      eventType: 'purchase',
+      title: `${service.facility.name} - ${service.name}`,
+      description: `Purchased ${quantity}x ${service.name} for $${totalAmount.toFixed(2)}`,
+      facilityId,
+      facilityTransactionId: transaction.id,
+      amount: totalAmount,
+      metadata: JSON.stringify({
+        quantity,
+        unitPrice,
+        paymentMethod,
+        paymentStatus
+      })
+    }
+  });
+
+  res.json({
+    success: true,
+    message: 'Service added successfully',
+    data: transaction
+  });
+}));
+
+// Update payment status
+router.patch('/transaction/:transactionId/payment', asyncHandler(async (req, res) => {
+  const { transactionId } = req.params;
+  const { paymentStatus, paymentMethod, notes } = req.body;
+
+  if (!['pending', 'completed', 'cancelled', 'refunded'].includes(paymentStatus)) {
+    throw new AppError('Invalid payment status', 400);
+  }
+
+  const transaction = await prisma.facilityTransaction.update({
+    where: { id: transactionId },
+    data: {
+      paymentStatus,
+      paymentMethod,
+      notes: notes || undefined,
+      updatedAt: new Date()
+    },
+    include: {
+      booking: {
+        select: { id: true }
+      },
+      facility: {
+        select: { name: true }
+      }
+    }
+  });
+
+  // Create guest journey event for payment update
+  if (paymentStatus === 'completed') {
+    await prisma.guestJourneyEvent.create({
+      data: {
+        bookingId: transaction.bookingId,
+        eventType: 'payment',
+        title: `Payment Received - ${transaction.facility.name}`,
+        description: `Payment of $${transaction.totalAmount.toFixed(2)} received via ${paymentMethod}`,
+        facilityId: transaction.facilityId,
+        facilityTransactionId: transaction.id,
+        amount: transaction.totalAmount,
+        metadata: JSON.stringify({
+          paymentMethod,
+          previousStatus: 'pending'
+        })
+      }
+    });
+  }
+
+  res.json({
+    success: true,
+    message: 'Payment status updated successfully',
+    data: transaction
+  });
+}));
+
+// Get facility transactions (for facility staff dashboard)
+router.get('/facility/:facilityId/transactions', asyncHandler(async (req, res) => {
+  const { facilityId } = req.params;
+  const { 
+    page = 1, 
+    limit = 20, 
+    status, 
+    dateFrom, 
+    dateTo 
+  } = req.query;
+
+  const skip = (Number(page) - 1) * Number(limit);
+  
+  // Build where clause
+  const where: any = { facilityId };
+  
+  if (status) {
+    where.paymentStatus = status;
+  }
+  
+  if (dateFrom || dateTo) {
+    where.createdAt = {};
+    if (dateFrom) where.createdAt.gte = new Date(dateFrom as string);
+    if (dateTo) where.createdAt.lte = new Date(dateTo as string);
+  }
+
+  const [transactions, total] = await Promise.all([
+    prisma.facilityTransaction.findMany({
+      where,
+      include: {
+        booking: {
+          select: {
+            id: true,
+            guest: {
+              select: { firstName: true, lastName: true, phone: true }
+            },
+            room: {
+              select: { number: true }
+            }
+          }
+        },
+        service: {
+          select: { name: true, category: true }
+        }
+      },
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: Number(limit)
+    }),
+    prisma.facilityTransaction.count({ where })
+  ]);
+
+  res.json({
+    success: true,
+    data: {
+      transactions,
+      pagination: {
+        page: Number(page),
+        limit: Number(limit),
+        total,
+        pages: Math.ceil(total / Number(limit))
+      }
+    }
+  });
+}));
+
+export default router;

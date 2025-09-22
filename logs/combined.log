@@ -1,0 +1,6 @@
+{"level":"info","message":"✅ Connected to MySQL database via Prisma","service":"onetapstay-backend","timestamp":"2025-09-22T15:28:23.155Z"}
+{"level":"info","message":"🚀 Server running on port 5000","service":"onetapstay-backend","timestamp":"2025-09-22T15:28:23.165Z"}
+{"level":"info","message":"📱 Frontend URL: http://localhost:3000","service":"onetapstay-backend","timestamp":"2025-09-22T15:28:23.166Z"}
+{"level":"info","message":"🔗 Health check: http://localhost:5000/health","service":"onetapstay-backend","timestamp":"2025-09-22T15:28:23.167Z"}
+{"level":"info","message":"📊 Environment: development","service":"onetapstay-backend","timestamp":"2025-09-22T15:28:23.168Z"}
+{"level":"info","message":"Received SIGINT. Graceful shutdown...","service":"onetapstay-backend","timestamp":"2025-09-22T15:28:56.094Z"}
