@@ -1,7 +1,7 @@
 # OneTapStay
 OneTapStay - Unified Guest Identity & Service Management
 Hack Genesis 2025 Project by Tech_recons
-Problem Statement
+Problem Statement-
 Today's hotel guests face a fragmented experience with separate logins for room access, Wi-Fi, dining, spa, billing, and loyalty programs. This leads to repetitive information sharing, wasted time, and a disconnected experience. Hotels struggle with siloed data, missing opportunities for personalization and operational efficiency.
 
 Our Solution
